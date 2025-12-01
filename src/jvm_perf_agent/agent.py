@@ -13,6 +13,24 @@ or adapt this scaffold to use ADK-specific classes and registration APIs.
 from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict
+import time
+import uuid
+
+try:
+    from jvm_perf_agent.observability import log_run_start, log_run_end, record_analysis_time, get_metrics_snapshot
+except Exception:
+    # observability is optional; fall back to no-op functions
+    def log_run_start(run_id, context=None):
+        return None
+
+    def log_run_end(run_id, classification, key_metrics=None):
+        return None
+
+    def record_analysis_time(seconds):
+        return None
+
+    def get_metrics_snapshot():
+        return {}
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -189,6 +207,15 @@ def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict,
     ctx = context_dict or {}
     agent = create_perf_tuning_agent()
 
+    # run id and observability: generate a run id if not provided in context
+    run_id = ctx.get("run_id") or f"run-{uuid.uuid4().hex[:8]}"
+    # log start
+    try:
+        log_run_start(run_id, ctx)
+    except Exception:
+        pass
+    start_ts = time.time()
+
     # Parse JMeter
     try:
         jmeter_out = agent.call_tool("parse_jmeter_csv", jmeter_path)
@@ -217,6 +244,26 @@ def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict,
         summary = _summarize_results(diagnosis, raw, ctx)
     except Exception:
         summary = "(failed to summarize results)"
+
+    # observability: measure elapsed time and record it
+    try:
+        elapsed = time.time() - start_ts
+        record_analysis_time(elapsed)
+    except Exception:
+        elapsed = None
+
+    # log end and classification-based counters
+    try:
+        classification = diagnosis.get("classification") if isinstance(diagnosis, dict) else None
+        # expose key metrics such as p95 if available
+        key_metrics = {}
+        try:
+            key_metrics["p95_ms"] = jmeter_out.get("overall_stats", {}).get("p95_ms")
+        except Exception:
+            pass
+        log_run_end(run_id, classification or "INCONCLUSIVE", key_metrics)
+    except Exception:
+        pass
 
     # If session_id provided, load previous summary, compute brief comparison text,
     # and save the current summary as the last run for the session.
