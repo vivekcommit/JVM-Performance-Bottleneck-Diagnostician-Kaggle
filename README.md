@@ -1,136 +1,56 @@
 # jvm-perf-agent
 
-A compact Python AI agent (built with Google’s Agent Development Kit — ADK) to analyze JMeter CSV results and simplified JVM stats JSON, classify JVM performance bottlenecks (CPU_BOUND, GC_HEAVY, LATENCY_OTHER, INCONCLUSIVE), and produce actionable tuning recommendations for Vert.x or Tomcat on JDK 8 and JDK 21.
+A compact, explainable Python agent that helps diagnose Java service performance regressions by correlating JMeter load-test outputs with JVM-level metrics (GC, heap, CPU). The agent is intentionally small, deterministic, and easy to run from a notebook, CI job, or a lightweight HTTP wrapper.
 
-## Problem
+## Problem — why this matters
 
-Java services (Vert.x, Tomcat) frequently encounter performance regressions that are time-consuming to diagnose. Engineers must manually inspect JMeter results and JVM metrics (GC, heap, CPU) across JDK versions to determine whether problems are CPU-bound, GC-heavy, or caused by external latency.
+Diagnosing regressions in Java services (for example, Vert.x or Tomcat) is often manual and slow: engineers must scan JMeter CSVs for latency percentiles and throughput, cross-check error rates, and then inspect JVM metrics (GC pauses, heap growth, CPU utilization) to form a hypothesis. Differences between JDK versions, runtime frameworks, or GC tuning make reproducing and triaging regressions harder. This results in long incident cycles and risk of applying ineffective tuning changes that either fail to fix the problem or create new instability.
 
-## Solution
+## Agentic solution — what this project provides
 
-`jvm-perf-agent` automates diagnosis by:
-- Parsing JMeter CSV aggregate results and extracting key metrics (p50/p95/p99, error rate, throughput, time-series).
-- Parsing a simplified JVM stats JSON (GC overhead, pause times, heap trend, CPU utilization).
-- Applying deterministic rule-based logic to classify the bottleneck and generate clear tuning recommendations tailored for Vert.x or Tomcat on JDK 8/21.
+`jvm-perf-agent` automates the repetitive, first-cut diagnosis step with a transparent, rule-based agent. It parses JMeter CSVs into aggregated and time-series metrics, ingests a compact JVM JSON summary (GC events, heap samples, CPU), and applies deterministic heuristics to classify the dominant bottleneck (for example, CPU_BOUND, GC_HEAVY, LATENCY_OTHER, or INCONCLUSIVE). The output includes a structured `diagnosis` object (classification, findings, recommendations) and a concise human-readable `summary` suitable for an incident ticket. The approach prioritizes clear, actionable recommendations over black-box inference so teams can quickly validate and act on findings.
 
-## Architecture
+## Architecture — orchestrator, tools, memory, observability
 
-Project layout (under `src/jvm_perf_agent/`):
+The implementation follows a lightweight tool-oriented pattern: an orchestrator composes small focused tools and services to form the agent. Major components under `src/jvm_perf_agent/`:
 
-- `agent.py` — orchestrator and public entrypoints (e.g., `analyze_performance_run(...)`).
-- `tools/jmeter_parser.py` — custom JMeter CSV parser tool.
-- `tools/jvm_parser.py` — custom JVM stats parser tool.
-- `diagnosis.py` — deterministic rule-based classification and recommendation engine.
-- `sessions.py` — per-session state (compact run summaries).
-- `observability.py` — logging, in-memory metrics, and trace lists.
+- `agent.py`: the orchestrator and public entry points (`analyze_performance_run`, `run_http_like_handler`). It coordinates parsing, diagnosis, summarization, and session compare logic.
+- `tools/jmeter_parser.py`: parses JMeter CSV files (pandas when available, csv fallback) and returns aggregate metrics and 10s time-series buckets.
+- `tools/jvm_parser.py`: ingests compact JVM JSON (GC events, heap samples, CPU) and produces gc summaries, heap trends, and a simple CPU health flag.
+- `diagnosis.py`: the deterministic rule engine that maps parsed metrics to classifications, findings, and tailored recommendations (framework/JDK-aware when context is provided).
+- `sessions.py`: an in-memory session helper that stores a compact summary per `session_id`, enabling simple "compared to last run" comparisons useful for regression triage.
+- `observability.py`: light-weight observability hooks (INFO-level logging and small in-memory metrics counters) to trace runs and collect counts/latency for demo or CI use.
 
-The code favors readability and determinism over opaque heuristics.
+This modular design keeps each piece small and testable and makes it straightforward to swap or extend tools (for example, adding richer JVM inputs or a persistent session store).
 
-## Agent Concepts
+## Mapping to the 5‑Day AI Agents Intensive concepts
 
-- Multi-agent: An orchestrator LLM agent coordinates small, focused tool agents for parsing and diagnosis.
-- Tools: Minimal custom tools only — JMeter parser, JVM parser, diagnosis/run-summary tool.
-- Sessions & Memory: Use an in-memory session service (ADK `InMemorySessionService` or equivalent) to store compact summaries and enable "compared to your last run..." comparisons.
-- Observability: Python `logging` (INFO), an in-memory metrics dict (runs, classification counts, avg analysis time), and a simple trace of tool invocations.
-- A2A & Deployment: Expose a single function such as `analyze_performance_run(...)` or `run_http_like_handler(body)` for easy integration by other agents or HTTP services.
+This project intentionally maps to key agent-design concepts taught in the intensive:
 
-## Getting Started
+- Multi-agent & Tools: the orchestrator behaves like a coordinator that composes small, purpose-built tools (parsers, classifier). Each tool is simple and focused — a recommended pattern in agent design to reduce complexity and increase explainability.
+- Sessions & Memory: the `sessions` component demonstrates short-term memory: storing a previous run summary and enabling the agent to produce comparative statements like "p95 improved by X ms compared to last run" — an important UX pattern for iterative tuning.
+- Observability: lightweight telemetry and logs let you audit what the agent did and measure usage (runs, classification counts, avg analysis time). Observability is crucial for trust and debugging in automated agent workflows.
+- A2A / Deployment: the `run_http_like_handler` and the suggested FastAPI wrapper illustrate how an agent can be composed into pipelines or called by other agents (A2A), enabling automation and CI integration without heavy infra.
+- Deterministic, Explainable Reasoning: using explicit rules keeps recommendations reproducible and reviewable — a practical choice when a human operator must validate and act on suggestions.
 
-Prerequisites:
+## Getting Started (short)
 
-- Python 3.10+
-- (Optional) Create and activate a virtual environment:
+Prerequisites: Python 3.10+. Recommended: create a venv and install requirements (if provided).
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Install dependencies (if provided):
-
-```powershell
-pip install -r requirements.txt
-```
-
-Or install the package in editable mode (if packaging is prepared):
-
-```powershell
-pip install -e .
-```
-
-## How to Run Locally
-
-Typical usage patterns:
-
-1. CLI (example — placeholder):
-
-```powershell
-python -m src.jvm_perf_agent.agent analyze_performance_run --jmeter ./data/sample.csv --jvm ./data/jvm_stats.json
-```
-
-2. Programmatic import:
+Quick programmatic usage:
 
 ```python
 from jvm_perf_agent.agent import analyze_performance_run
-result = analyze_performance_run(jmeter_csv_text, jvm_json_text)
-print(result["classification"])
-print(result["recommendations"])
+result = analyze_performance_run(jmeter_csv_text, jvm_json_text, context={"sla_ms":200, "framework":"Tomcat"})
+print(result["summary"])
 ```
 
-Notes:
-- The agent uses explicit rule-based logic for classification; avoid opaque ML unless clearly documented.
-- Logging at INFO level provides run lifecycle and tool trace information.
+See `notebooks/kaggle_capstone.ipynb` for a ready-to-run Kaggle-style demo with three synthetic scenarios and an evaluation cell.
 
-## Kaggle Notebook Submission
+## A2A & Deployment (brief)
 
-The final Kaggle notebook should include:
-
-- Problem & Solution overview.
-- Installation or simulated-install instructions for the package.
-- At least 2–3 synthetic example runs (CPU_BOUND, GC_HEAVY, LATENCY_OTHER).
-- Both structured output (JSON/dict) and a natural-language explanation for each run.
-- A short "Deployment & A2A" section showing how another agent or HTTP service would call `analyze_performance_run(...)`.
+Two easy integration patterns: (1) a tiny FastAPI wrapper exposing `POST /analyze` that forwards payloads to `run_http_like_handler`, and (2) direct A2A invocation by importing the handler from another process. Both approaches are low-cost for POCs and integrate with CI pipelines or test orchestrators.
 
 ---
 
-## A2A & Deployment
-
-This project is intentionally small and 3-day deployable for demos or POC. Two practical integration patterns are:
-
-1) Wrap the agent in a tiny HTTP service (FastAPI/Flask)
-
-- Architecture: a lightweight web server exposes an endpoint (e.g., `POST /analyze`) that accepts a JSON body with fields `jmeter_path`, `jvm_stats_path`, `context`, and optional `session_id`. The endpoint calls the package function `run_http_like_handler(request_body)` (or `analyze_performance_run(...)`) and returns the JSON response. Observability hooks (`observability.log_run_start` / `log_run_end`) and the in-memory session helper are used to persist or compare runs.
-- Why this is 3-day realistic: no infra changes required — a single-process FastAPI app can be developed and tested locally; containerization (Docker) is optional and straightforward.
-
-2) Agent-to-Agent (A2A) invocation
-
-- Architecture: another agent (or orchestration layer) prepares the same JSON payload and invokes the HTTP endpoint or directly imports `run_http_like_handler` if running in the same environment. This supports automated pipelines where a CI job or test orchestrator calls the agent after a load test completes.
-- Why this is 3-day realistic: the handler is framework-agnostic and returns simple JSON; wiring into an existing orchestrator or CI script is just an HTTP POST or a module import.
-
-Example request JSON shape (POST body or A2A payload):
-
-```json
-{
-	"jmeter_path": "<path or raw CSV text>",
-	"jvm_stats_path": "<path or raw JSON text>",
-	"context": { "sla_ms": 200, "framework": "Tomcat", "jdk": "8", "service": "payments", "debug": false },
-	"session_id": "session-123"
-}
-```
-
-Example response shape:
-
-```json
-{
-	"summary": "Classification: GC_HEAVY\nTop findings: ...",
-	"diagnosis": { "classification": "GC_HEAVY", "findings": [...], "recommendations": [...] },
-	"raw": { "jmeter": {...}, "jvm": {...}, "context": {...} },
-	"comparison": "p95 change: -120ms (prev 420ms -> now 300ms)"
-}
-```
-
-If you'd like, I can scaffold a minimal `app.py` (FastAPI) showing the exact endpoint and a Dockerfile for local testing.
-
----
-
-If you want, I can also add `requirements.txt`, a minimal `pyproject.toml`, example data under `data/`, and a small `examples/runner.py` to demonstrate the agent locally.
+If you'd like, I can also add a minimal `requirements.txt` / `pyproject.toml`, a sample `app.py` (FastAPI) plus Dockerfile, and example data under `data/` to make local testing even simpler.
