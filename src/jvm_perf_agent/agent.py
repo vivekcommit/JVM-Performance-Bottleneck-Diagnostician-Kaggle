@@ -176,7 +176,7 @@ def _summarize_results(diagnosis: Dict[str, Any], raw: Dict[str, Any], context: 
     return "\n".join(lines)
 
 
-def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict, context_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict, context_dict: Dict[str, Any] | None = None, session_id: str | None = None) -> Dict[str, Any]:
     """Convenience entrypoint to parse inputs and run diagnosis.
 
     Parameters:
@@ -218,7 +218,65 @@ def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict,
     except Exception:
         summary = "(failed to summarize results)"
 
-    return {"summary": summary, "diagnosis": diagnosis, "raw": raw}
+    # If session_id provided, load previous summary, compute brief comparison text,
+    # and save the current summary as the last run for the session.
+    comparison_text = None
+    if session_id:
+        try:
+            from jvm_perf_agent.sessions import load_previous_run_summary, save_run_summary
+
+            prev = load_previous_run_summary(session_id)
+            # Prepare current summary to save
+            current_summary = {
+                "diagnosis": diagnosis,
+                "overall_stats": jmeter_out.get("overall_stats") if isinstance(jmeter_out, dict) else None,
+                "gc_summary": jvm_out.get("gc_summary") if isinstance(jvm_out, dict) else None,
+            }
+
+            # Compute comparison if previous exists
+            if prev:
+                try:
+                    prev_overall = prev.get("overall_stats") or prev.get("jmeter", {}).get("overall_stats") or {}
+                    prev_p95 = float(prev_overall.get("p95_ms") or 0.0)
+                except Exception:
+                    prev_p95 = 0.0
+                try:
+                    prev_diag = prev.get("diagnosis") or prev.get("diagnosis", {})
+                    prev_class = (prev_diag.get("classification") if isinstance(prev_diag, dict) else None) or prev.get("classification")
+                except Exception:
+                    prev_class = None
+
+                curr_overall = current_summary.get("overall_stats") or {}
+                curr_p95 = float(curr_overall.get("p95_ms") or 0.0)
+                curr_class = (diagnosis.get("classification") if isinstance(diagnosis, dict) else None) or diagnosis.get("primary")
+
+                p95_delta = None
+                try:
+                    p95_delta = curr_p95 - prev_p95
+                except Exception:
+                    p95_delta = None
+
+                parts = []
+                if p95_delta is not None:
+                    sign = "+" if p95_delta >= 0 else ""
+                    parts.append(f"p95 change: {sign}{round(p95_delta,3)} ms (prev {round(prev_p95,3)} -> now {round(curr_p95,3)})")
+                if prev_class is not None and curr_class is not None and prev_class != curr_class:
+                    parts.append(f"classification changed: {prev_class} -> {curr_class}")
+                if parts:
+                    comparison_text = "; ".join(parts)
+                    summary = summary + "\n\nComparison with previous run:\n" + comparison_text
+
+            # save current summary (overwrite)
+            try:
+                save_run_summary(session_id, current_summary)
+            except Exception:
+                # non-fatal
+                pass
+        except Exception:
+            # session helper import or ops failed; ignore silently
+            comparison_text = None
+
+    return {"summary": summary, "diagnosis": diagnosis, "raw": raw, "comparison": comparison_text}
 
 
 __all__ = ["create_perf_tuning_agent", "analyze_performance_run", "PerfTuningAgent"]
