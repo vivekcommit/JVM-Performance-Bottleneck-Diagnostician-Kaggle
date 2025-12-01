@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+# Notebooks
+.ipynb_checkpoints/
+# Env
+.venv/
+.env
+# Editor
+.vscode/
+.idea/
+# OS
+.DS_Store
+# OneDrive/temp
+~$*
