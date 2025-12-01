@@ -93,4 +93,44 @@ The final Kaggle notebook should include:
 
 ---
 
+## A2A & Deployment
+
+This project is intentionally small and 3-day deployable for demos or POC. Two practical integration patterns are:
+
+1) Wrap the agent in a tiny HTTP service (FastAPI/Flask)
+
+- Architecture: a lightweight web server exposes an endpoint (e.g., `POST /analyze`) that accepts a JSON body with fields `jmeter_path`, `jvm_stats_path`, `context`, and optional `session_id`. The endpoint calls the package function `run_http_like_handler(request_body)` (or `analyze_performance_run(...)`) and returns the JSON response. Observability hooks (`observability.log_run_start` / `log_run_end`) and the in-memory session helper are used to persist or compare runs.
+- Why this is 3-day realistic: no infra changes required — a single-process FastAPI app can be developed and tested locally; containerization (Docker) is optional and straightforward.
+
+2) Agent-to-Agent (A2A) invocation
+
+- Architecture: another agent (or orchestration layer) prepares the same JSON payload and invokes the HTTP endpoint or directly imports `run_http_like_handler` if running in the same environment. This supports automated pipelines where a CI job or test orchestrator calls the agent after a load test completes.
+- Why this is 3-day realistic: the handler is framework-agnostic and returns simple JSON; wiring into an existing orchestrator or CI script is just an HTTP POST or a module import.
+
+Example request JSON shape (POST body or A2A payload):
+
+```json
+{
+	"jmeter_path": "<path or raw CSV text>",
+	"jvm_stats_path": "<path or raw JSON text>",
+	"context": { "sla_ms": 200, "framework": "Tomcat", "jdk": "8", "service": "payments", "debug": false },
+	"session_id": "session-123"
+}
+```
+
+Example response shape:
+
+```json
+{
+	"summary": "Classification: GC_HEAVY\nTop findings: ...",
+	"diagnosis": { "classification": "GC_HEAVY", "findings": [...], "recommendations": [...] },
+	"raw": { "jmeter": {...}, "jvm": {...}, "context": {...} },
+	"comparison": "p95 change: -120ms (prev 420ms -> now 300ms)"
+}
+```
+
+If you'd like, I can scaffold a minimal `app.py` (FastAPI) showing the exact endpoint and a Dockerfile for local testing.
+
+---
+
 If you want, I can also add `requirements.txt`, a minimal `pyproject.toml`, example data under `data/`, and a small `examples/runner.py` to demonstrate the agent locally.
