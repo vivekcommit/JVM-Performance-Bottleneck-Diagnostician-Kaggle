@@ -55,9 +55,10 @@ except Exception:  # pragma: no cover
     parse_jvm_stats = None
 
 try:
-    from jvm_perf_agent.diagnosis import run_diagnosis
+    # diagnosis.py exposes diagnose_performance; import it and register under that name
+    from jvm_perf_agent.diagnosis import diagnose_performance
 except Exception:  # pragma: no cover
-    run_diagnosis = None
+    diagnose_performance = None
 
 
 def _fallback_run_diagnosis(jmeter: Dict[str, Any], jvm: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,13 +140,40 @@ def create_perf_tuning_agent() -> PerfTuningAgent:
 
         agent.register_tool("parse_jvm_stats", _err_jvm)
 
-    # Register diagnosis tool (use fallback if not present)
-    if run_diagnosis is not None:
-        agent.register_tool("run_diagnosis", run_diagnosis)
+    # Register diagnosis tool (prefer the real diagnose_performance if available)
+    if diagnose_performance is not None:
+        agent.register_tool("diagnose_performance", diagnose_performance)
     else:
-        agent.register_tool("run_diagnosis", _fallback_run_diagnosis)
+        agent.register_tool("diagnose_performance", _fallback_run_diagnosis)
 
     return agent
+
+
+def _summarize_results(diagnosis: Dict[str, Any], raw: Dict[str, Any], context: Dict[str, Any]) -> str:
+    """Create a concise, user-facing summary of the diagnosis and key findings.
+
+    This acts as a lightweight LLM-style summarizer for demos/notebooks.
+    """
+    cls = diagnosis.get("classification") or diagnosis.get("primary") or "INCONCLUSIVE"
+    findings = diagnosis.get("findings") or diagnosis.get("reasons") or []
+    recs = diagnosis.get("recommendations") or []
+
+    lines = [f"Classification: {cls}"]
+    if findings:
+        lines.append("Top findings:")
+        for f in findings[:3]:
+            lines.append(f" - {f}")
+    if recs:
+        lines.append("Top recommendations:")
+        for r in recs[:3]:
+            lines.append(f" - {r}")
+
+    # small contextual pointers
+    svc = context.get("service") or context.get("app") or None
+    if svc:
+        lines.append(f"Service: {svc}")
+
+    return "\n".join(lines)
 
 
 def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict, context_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -175,14 +203,22 @@ def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict,
         logger.exception("Failed to parse JVM stats: %s", exc)
         jvm_out = {"error": str(exc)}
 
-    # Run diagnosis
+    # Run diagnosis (use the registered diagnose_performance tool)
     try:
-        diagnosis = agent.call_tool("run_diagnosis", jmeter_out, jvm_out, ctx)
+        diagnosis = agent.call_tool("diagnose_performance", jmeter_out, jvm_out, ctx)
     except Exception as exc:
         logger.exception("Diagnosis failed: %s", exc)
         diagnosis = {"error": str(exc)}
 
-    return {"diagnosis": diagnosis, "raw": {"jmeter": jmeter_out, "jvm": jvm_out, "context": ctx}}
+    raw = {"jmeter": jmeter_out, "jvm": jvm_out, "context": ctx}
+
+    # Summarize (lightweight LLM-style summarizer)
+    try:
+        summary = _summarize_results(diagnosis, raw, ctx)
+    except Exception:
+        summary = "(failed to summarize results)"
+
+    return {"summary": summary, "diagnosis": diagnosis, "raw": raw}
 
 
 __all__ = ["create_perf_tuning_agent", "analyze_performance_run", "PerfTuningAgent"]
