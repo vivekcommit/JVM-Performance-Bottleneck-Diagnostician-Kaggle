@@ -327,3 +327,39 @@ def analyze_performance_run(jmeter_path: str | dict, jvm_stats_path: str | dict,
 
 
 __all__ = ["create_perf_tuning_agent", "analyze_performance_run", "PerfTuningAgent"]
+
+
+def run_http_like_handler(request_body: Dict[str, Any]) -> Dict[str, Any]:
+    """Framework-agnostic handler that accepts a request-like dict and returns a serializable dict.
+
+    Expected request_body keys:
+      - `jmeter_path` (str): path or raw CSV text for JMeter results
+      - `jvm_stats_path` (str): path or raw JSON text for JVM stats
+      - `context` (dict, optional): analysis context (sla_ms, framework, jdk, debug, service, etc.)
+      - `session_id` (str, optional): session id to persist/compare runs
+
+    Returns a JSON-serializable dict with keys `summary`, `diagnosis`, `raw`, and `comparison`,
+    or an `error` key with status and message when validation fails.
+    """
+    if not isinstance(request_body, dict):
+        return {"error": {"status": 400, "message": "request_body must be a dict"}}
+
+    jmeter_path = request_body.get("jmeter_path")
+    jvm_stats_path = request_body.get("jvm_stats_path")
+    context = request_body.get("context") or {}
+    session_id = request_body.get("session_id")
+
+    if not jmeter_path:
+        return {"error": {"status": 400, "message": "missing required field: jmeter_path"}}
+    if not jvm_stats_path:
+        return {"error": {"status": 400, "message": "missing required field: jvm_stats_path"}}
+
+    try:
+        result = analyze_performance_run(jmeter_path, jvm_stats_path, context, session_id=session_id)
+    except Exception as exc:
+        # Catch and return error details in a serializable form
+        return {"error": {"status": 500, "message": "internal error during analysis", "detail": str(exc)}}
+
+    # Ensure result is JSON-serializable (avoid non-serializable objects)
+    # The package returns simple Python types; return as-is
+    return result
