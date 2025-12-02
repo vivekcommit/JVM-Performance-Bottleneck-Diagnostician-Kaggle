@@ -37,7 +37,43 @@ This project intentionally maps to key agent-design concepts taught in the inten
 
 Prerequisites: Python 3.10+. Recommended: create a venv and install requirements (if provided).
 
-Quick programmatic usage:
+### Gemini Flash Integration (Optional)
+
+To enable LLM-backed session analysis using Gemini Flash:
+
+1. **Install the Gemini client:**
+   ```bash
+   pip install google-generativeai
+   ```
+
+2. **Configure your API key and model:**
+   
+   **Option A: Config file (recommended for security)**
+   - Copy the template: `cp config/jvm_perf_agent.json.example config/jvm_perf_agent.json`
+   - Edit `config/jvm_perf_agent.json` and add your API key:
+     ```json
+     {
+       "gemini_api_key": "YOUR_API_KEY_HERE",
+       "gemini_model": "gemini-2.5-flash-lite"
+     }
+     ```
+   - The agent will automatically load this config on import.
+
+   **Option B: Environment variables**
+   ```bash
+   export JVM_PERF_AGENT_GEMINI_API_KEY="your-key-here"
+   export JVM_PERF_AGENT_GEMINI_MODEL="gemini-2.5-flash-lite"
+   ```
+
+   **Option C: User home directory (auto-loaded)**
+   - Create `~/.jvm_perf_agent/config.json` with the same structure as the template.
+
+3. **Enable Gemini usage:**
+   - Set `USE_GEMINI_SESSION=1` to force Gemini; otherwise it auto-enables if a config file or API key is detected.
+
+When enabled, the agent stores both the deterministic diagnosis and an LLM-produced analysis (key `"last_summary_llm"`) in each session for richer insights.
+
+### Quick Usage
 
 ```python
 from jvm_perf_agent.agent import analyze_performance_run
